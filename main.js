@@ -279,12 +279,32 @@ document.addEventListener('DOMContentLoaded', ()=>{
       }, ()=>{ showToast('Hapus dibatalkan','info'); });
     }
 
+    const clearExamplesBtn = document.getElementById('clearExamplesBtn');
+    function updateClearExamplesBtn(){
+      if(!clearExamplesBtn) return;
+      const hasExamples = transactions.some(t => typeof t.desc === 'string' && /^Contoh:/i.test(t.desc));
+      clearExamplesBtn.disabled = !hasExamples;
+      clearExamplesBtn.style.opacity = hasExamples ? '1' : '.5';
+    }
+
+    if(clearExamplesBtn){
+      clearExamplesBtn.addEventListener('click', ()=>{
+        openConfirm('Hapus semua transaksi contoh (Contoh: ...)?', ()=>{
+          const before = transactions.length;
+          transactions = transactions.filter(t => !(typeof t.desc === 'string' && /^Contoh:/i.test(t.desc)));
+          save(); render(); renderBudgets(); updateClearExamplesBtn();
+          showToast(`Dihapus ${before - transactions.length} transaksi contoh`,'success');
+        }, ()=>{ showToast('Penghapusan contoh dibatalkan','info'); });
+      });
+    }
+
     if(refreshBtn){
       refreshBtn.addEventListener('click', ()=>{
         load();
         renderCategorySelect();
         render();
         renderBudgets();
+        updateClearExamplesBtn();
         showToast('Data disegarkan','success');
       });
     }
@@ -529,6 +549,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     // Accessibility: senior-friendly large-mode toggle
     const ACCESS_KEY = 'mm_accessibility';
     const accessToggle = document.getElementById('accessToggle');
+    const accessToggleSm = document.getElementById('accessToggleSm');
     function applyAccessibility(enabled){
       if(enabled) document.documentElement.setAttribute('data-accessibility','large');
       else document.documentElement.removeAttribute('data-accessibility');
@@ -536,7 +557,13 @@ document.addEventListener('DOMContentLoaded', ()=>{
         accessToggle.setAttribute('aria-pressed', !!enabled);
         accessToggle.innerText = enabled ? 'A+' : 'A+';
       }
+      if(accessToggleSm){ accessToggleSm.setAttribute('aria-pressed', !!enabled); }
     }
+    if(accessToggleSm){ accessToggleSm.addEventListener('click', ()=> accessToggle && accessToggle.click()); }
+    const themeToggleSm = document.getElementById('themeToggleSm');
+    if(themeToggleSm){ themeToggleSm.addEventListener('click', ()=> themeToggle && themeToggle.click()); }
+    const refreshBtnSm = document.getElementById('refreshBtnSm');
+    if(refreshBtnSm){ refreshBtnSm.addEventListener('click', ()=> refreshBtn && refreshBtn.click()); }
     (function initAccessibility(){
       const saved = localStorage.getItem(ACCESS_KEY);
       const initVal = saved === 'large';
@@ -561,6 +588,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
         addTransaction('Contoh: Gaji', 5000000, new Date().toISOString(), 'salary');
         addTransaction('Contoh: Belanja', -250000, new Date().toISOString(), 'shopping');
       } else render();
+      // update UI for example-clear button
+      updateClearExamplesBtn();
     })();
 
   }catch(e){
