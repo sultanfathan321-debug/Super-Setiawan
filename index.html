@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Super Setiawan — Simple</title>
+<link rel="stylesheet" href="style.css">
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Tesseract.js for simple OCR -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="brand">
+      <div class="logo">SS</div>
+      <div>
+        <div class="title">Super Setiawan</div>
+        <div class="hint">Catat pemasukan dan pengeluaran secara cepat</div>
+      </div>
+    </div>
+    <div class="totals">
+      <div class="pill" id="total-income">Pemasukan: Rp0</div>
+      <div class="pill" id="total-expense">Pengeluaran: Rp0</div>
+      <button id="refreshBtn" class="btn ghost" aria-label="Refresh data" title="Segarkan data">🔄</button>
+      <button id="themeToggle" class="btn ghost theme-toggle" aria-label="Toggle theme" title="Toggle theme">🌙</button>
+      <button id="accessToggle" class="btn ghost theme-toggle" aria-label="Toggle accessibility" title="Ubah tampilan jadi teks besar">A+</button>
+    </div>
+  </div>
+
+  <div class="balance-card card">
+    <div>
+      <div class="hint">Saldo Sekarang</div>
+      <div class="balance" id="balance">Rp0</div>
+    </div>
+    <div class="totals" style="margin-left:auto">
+      <div class="pill">Transaksi: <span id="tx-count">0</span></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h3>Tambahkan Transaksi</h3>
+        <div class="form-row">
+          <input class="input" id="quickText" placeholder="Contoh: 'beli bakso Rp2000' — quick add" />
+          <button id="quickAddBtn" class="btn">Tambahkan Cepat</button>
+        </div>
+        <div class="form-row">
+          <input class="input" id="desc" placeholder="Deskripsi (mis. Gaji / Belanja)" />
+          <select id="type" class="small">
+            <option value="income">Pemasukan</option>
+            <option value="expense" selected>Pengeluaran</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <input class="input" id="amount" placeholder="Masukkan nominal (contoh: Rp10.000 atau 10000)" />
+          <select id="category" class="small"></select>
+          <button id="addBtn" class="btn">Tambahkan</button>
+        </div>
+        <div class="hint">Atau scan struk/foto untuk masukkan otomatis</div>
+        <div class="form-row" style="margin-top:8px">
+          <div class="scan-area">
+            <label class="btn ghost" style="cursor:pointer">
+              Upload/Scan
+              <input type="file" id="fileInput" accept="image/*" style="display:none" />
+            </label>
+            <div class="preview" id="imgPreview">No</div>
+            <button id="scanBtn" class="btn">Scan</button>
+          </div>
+        </div>
+        <div class="hint" id="ocrHint"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Riwayat Transaksi</h3>
+        <div id="txList" class="tx-list"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>Grafik Pemasukan / Pengeluaran</h3>
+        <div class="chart-wrap">
+          <canvas id="chart"></canvas>
+        </div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>Budgeting</h3>
+        <div id="budgetList" class="budget-list"></div>
+        <div class="hint">Tambahkan kategori dengan ikon dan atur budget bulanan.</div>
+        <div class="form-row" style="margin-top:8px">
+          <input class="input" id="newCatName" placeholder="Nama kategori (mis. Makanan)" />
+          <input class="input small" id="newCatIcon" placeholder="Ikon (emoji) 🍔" />
+        </div>
+        <div class="form-row">
+          <input class="input" id="newCatBudget" placeholder="Budget per bulan (contoh: 500000)" />
+          <button id="addCatBtn" class="btn">Tambah Kategori</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>Tips</h3>
+        <div class="hint">Gunakan format `Rp10.000` atau `10000` pada input nominal. Hasil scan mencoba mengekstrak angka pada struk/foto.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">Webisite By: Sultan Fathan Al Khaiyir (Setiawan Son).</div>
+</div>
+
+  <div id="toastContainer" aria-live="polite" class="toast-container"></div>
+
+  <!-- Confirmation Modal (non-blocking) -->
+  <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-body" id="confirmModalBody">Apakah Anda yakin?</div>
+      <div class="modal-actions" style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button id="confirmNo" class="btn ghost">Batal</button>
+        <button id="confirmYes" class="btn">Hapus</button>
+      </div>
+    </div>
+  </div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
