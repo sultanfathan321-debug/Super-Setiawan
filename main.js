@@ -549,22 +549,50 @@ document.addEventListener('DOMContentLoaded', ()=>{
         }
 
         // try to find currency amounts (also accept plain numbers)
-        const matches = ocrText.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
-        if(matches && matches.length){
-          const nums = matches.map(m => parseCurrencyString(m));
-          const max = Math.max(...nums);
+        // Prefer lines containing the explicit word "total" (exclude "subtotal") when possible
+        let amtFromTotalLine = null;
+        const lines = ocrText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        // search from bottom up for the most likely "total" line
+        for(let i = lines.length - 1; i >= 0; i--){
+          const ln = lines[i];
+          const low = ln.toLowerCase();
+          if(/\btotal\b/i.test(low) && !/\bsubtotal\b/i.test(low)){
+            const found = ln.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
+            if(found && found.length){
+              // pick last numeric token in the total line (handles formats like "Total Rp 70.000")
+              amtFromTotalLine = parseCurrencyString(found[found.length-1]);
+              break;
+            }
+          }
+        }
+
+        if(amtFromTotalLine !== null){
           const lower = ocrText.toLowerCase();
           const isIncome = /income|pemasukan|gaji|salary/.test(lower);
-          const amt = isIncome ? Math.abs(max) : -Math.abs(max);
-          // attempt to pick category from OCR text
+          const amt = isIncome ? Math.abs(amtFromTotalLine) : -Math.abs(amtFromTotalLine);
           let catId = 'uncategorized';
           for(const c of categories){ if(c.keywords && c.keywords.some(k=> new RegExp('\\b'+escapeRegExp(k)+'\\b','i').test(lower))){ catId = c.id; break; } }
-          addTransaction('Scan: ' + (matches[0]||'hasil scan'), amt, new Date().toISOString(), catId);
-          ocrHint.innerText = `Terbaca: ${matches.join(', ')} — masuk sebagai ${isIncome? 'income':'pengeluaran'}`;
+          addTransaction('Scan: total', amt, new Date().toISOString(), catId);
+          ocrHint.innerText = `Terbaca total: ${fmt(amtFromTotalLine)} — masuk sebagai ${isIncome? 'income':'pengeluaran'}`;
           showToast('Scan berhasil: ' + fmt(amt),'success');
         } else {
-          ocrHint.innerText = 'Tidak menemukan angka pada gambar.';
-          showToast('Tidak menemukan angka pada gambar.','warning');
+          const matches = ocrText.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
+          if(matches && matches.length){
+            const nums = matches.map(m => parseCurrencyString(m));
+            const max = Math.max(...nums);
+            const lower = ocrText.toLowerCase();
+            const isIncome = /income|pemasukan|gaji|salary/.test(lower);
+            const amt = isIncome ? Math.abs(max) : -Math.abs(max);
+            // attempt to pick category from OCR text
+            let catId = 'uncategorized';
+            for(const c of categories){ if(c.keywords && c.keywords.some(k=> new RegExp('\\b'+escapeRegExp(k)+'\\b','i').test(lower))){ catId = c.id; break; } }
+            addTransaction('Scan: ' + (matches[0]||'hasil scan'), amt, new Date().toISOString(), catId);
+            ocrHint.innerText = `Terbaca: ${matches.join(', ')} — masuk sebagai ${isIncome? 'income':'pengeluaran'}`;
+            showToast('Scan berhasil: ' + fmt(amt),'success');
+          } else {
+            ocrHint.innerText = 'Tidak menemukan angka pada gambar.';
+            showToast('Tidak menemukan angka pada gambar.','warning');
+          }
         }
       }catch(err){
         console.error(err);
