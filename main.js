@@ -457,39 +457,103 @@ document.addEventListener('DOMContentLoaded', ()=>{
         showToast('Ukuran file terlalu besar untuk discan (>6MB)','warning');
         return;
       }
+
+      // quick availability check for Tesseract (allow fallback to Tesseract.recognize)
+      if(typeof Tesseract === 'undefined' || (typeof Tesseract.createWorker === 'undefined' && typeof Tesseract.recognize !== 'function')){
+        showToast('Library OCR tidak tersedia. Pastikan koneksi internet atau jalankan halaman lewat server lokal (http).','error',8000);
+        ocrHint.innerText = 'OCR tidak tersedia.';
+        return;
+      }
+
       ocrHint.innerText = 'Scanning... (harap tunggu)';
       const origText = scanBtn.innerText;
       scanBtn.disabled = true; scanBtn.innerText = 'Scanning...';
+      let worker = null;
+      const OCR_TIMEOUT_MS = 30000; // 30s
+      let timeoutId = null;
+
       try{
         const { createWorker } = Tesseract;
-        const worker = createWorker({ logger: m => {
-          if(m && m.status){
-            if(typeof m.progress === 'number'){
-              const pct = Math.round(m.progress * 100);
-              ocrHint.innerText = `Scanning... ${pct}%`;
-            } else {
-              ocrHint.innerText = m.status;
-            }
-          }
-        } });
-        await worker.load();
-        await worker.loadLanguage('eng');
-        await worker.initialize('eng');
-        const { data: { text } } = await worker.recognize(lastFile);
-        await worker.terminate();
+        let ocrText = null;
 
-        if(!text || !text.trim()){
+        // Prefer worker API when fully supported; if the returned worker lacks the expected
+        // methods, gracefully fall back to Tesseract.recognize instead of throwing.
+        let triedWorker = false;
+        if(createWorker && typeof createWorker === 'function'){
+          try{
+            worker = createWorker({ logger: m => {
+              if(m && m.status){
+                if(typeof m.progress === 'number'){
+                  const pct = Math.round(m.progress * 100);
+                  ocrHint.innerText = `Scanning... ${pct}%`;
+                } else {
+                  ocrHint.innerText = m.status;
+                }
+              }
+            } });
+          }catch(e){
+            console.warn('createWorker threw during construction, will fallback to recognize():', e);
+            worker = null;
+          }
+
+          if(worker && typeof worker.load === 'function'){
+            triedWorker = true;
+            await worker.load();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+
+            // race recognize with a timeout so UI doesn't hang indefinitely
+            const recognizePromise = worker.recognize(lastFile);
+            const res = await Promise.race([
+              recognizePromise,
+              new Promise((_, reject) => { timeoutId = setTimeout(() => reject(new Error('OCR timeout')), OCR_TIMEOUT_MS); })
+            ]);
+            if(timeoutId) clearTimeout(timeoutId);
+
+            ocrText = (res && res.data && res.data.text) ? res.data.text : (res.text || '');
+            await worker.terminate();
+            worker = null;
+          }
+        }
+
+        // If worker wasn't usable, try the older Tesseract.recognize API as a fallback
+        if(!triedWorker){
+          if(typeof Tesseract.recognize === 'function'){
+            console.warn('Worker API not supported by this build; using Tesseract.recognize fallback');
+            const progressHandler = m => {
+              if(m && m.status){
+                if(typeof m.progress === 'number'){
+                  const pct = Math.round(m.progress * 100);
+                  ocrHint.innerText = `Scanning... ${pct}%`;
+                } else {
+                  ocrHint.innerText = m.status;
+                }
+              }
+            };
+            const recognizePromise = Tesseract.recognize(lastFile, 'eng', { logger: progressHandler });
+            const res = await Promise.race([
+              recognizePromise,
+              new Promise((_, reject) => { timeoutId = setTimeout(() => reject(new Error('OCR timeout')), OCR_TIMEOUT_MS); })
+            ]);
+            if(timeoutId) clearTimeout(timeoutId);
+            ocrText = (res && res.data && res.data.text) ? res.data.text : (res.text || '');
+          } else {
+            throw new Error('Tesseract API not available');
+          }
+        }
+
+        if(!ocrText || !ocrText.trim()){
           showToast('Tidak menemukan teks pada gambar. Coba tingkatkan kontras atau gunakan foto lain.','warning');
           ocrHint.innerText = 'Tidak menemukan teks pada gambar.';
           return;
         }
 
         // try to find currency amounts (also accept plain numbers)
-        const matches = text.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
+        const matches = ocrText.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
         if(matches && matches.length){
           const nums = matches.map(m => parseCurrencyString(m));
           const max = Math.max(...nums);
-          const lower = text.toLowerCase();
+          const lower = ocrText.toLowerCase();
           const isIncome = /income|pemasukan|gaji|salary/.test(lower);
           const amt = isIncome ? Math.abs(max) : -Math.abs(max);
           // attempt to pick category from OCR text
@@ -505,9 +569,19 @@ document.addEventListener('DOMContentLoaded', ()=>{
       }catch(err){
         console.error(err);
         const msg = err && err.message ? err.message : String(err);
-        showToast('Error saat scanning: ' + msg,'error',8000);
-        ocrHint.innerText = 'Error saat scanning.';
+        if(msg.includes('OCR timeout')){
+          showToast('Proses scanning melebihi batas waktu. Coba gunakan foto dengan resolusi lebih rendah atau periksa koneksi.','error',8000);
+          ocrHint.innerText = 'Timeout saat scanning.';
+        } else if(/wasm|failed to fetch|worker/i.test(msg)){
+          showToast('OCR gagal dimuat. Jika membuka file lewat file://, jalankan server lokal atau periksa koneksi.','error',8000);
+          ocrHint.innerText = 'Gagal memuat engine OCR.';
+        } else {
+          showToast('Error saat scanning: ' + msg,'error',8000);
+          ocrHint.innerText = 'Error saat scanning.';
+        }
       }finally{
+        try{ if(timeoutId) clearTimeout(timeoutId); }catch(e){}
+        try{ if(worker) await worker.terminate(); }catch(e){}
         scanBtn.disabled = false; scanBtn.innerText = origText;
       }
     }
