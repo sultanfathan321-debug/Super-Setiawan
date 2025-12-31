@@ -296,6 +296,24 @@ document.addEventListener('DOMContentLoaded', ()=>{
       confirmYes.focus();
     }
 
+    // Success popup (auto-closing) - used to confirm an add operation
+    const successModal = document.getElementById('successModal');
+    const successModalBody = document.getElementById('successModalBody');
+    const successOk = document.getElementById('successOk');
+    function showSuccessPopup(message, autoCloseMs = 1800){
+      if(!successModal || !successModalBody){ showToast(message, 'success'); return; }
+      successModalBody.innerText = message;
+      successModal.classList.add('show'); successModal.setAttribute('aria-hidden','false');
+      let tid = setTimeout(()=>{
+        successModal.classList.remove('show'); successModal.setAttribute('aria-hidden','true');
+        successOk.onclick = null;
+      }, autoCloseMs);
+      successOk.onclick = ()=>{ clearTimeout(tid); successModal.classList.remove('show'); successModal.setAttribute('aria-hidden','true'); successOk.onclick = null; };
+      // allow backdrop click to close
+      function backdropHandler(e){ if(e.target === successModal || e.target.classList.contains('modal-backdrop')){ clearTimeout(tid); successModal.classList.remove('show'); successModal.setAttribute('aria-hidden','true'); successOk.onclick = null; successModal.removeEventListener('click', backdropHandler); } }
+      successModal.addEventListener('click', backdropHandler);
+    }
+
     function confirmAndRemove(id){
       const tx = transactions.find(t=>t.id===id);
       if(!tx){ showToast('Transaksi tidak ditemukan','error'); return; }
@@ -415,18 +433,27 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
 
     // actions
-    addBtn.onclick = ()=>{
+    function addTxFromInputs(typ){
       const desc = descEl.value.trim();
       const raw = amountEl.value.trim();
       let amt = parseCurrencyString(raw);
       if(!raw){ showToast('Isi nominal dulu','error'); return; }
-      const typ = typeEl.value;
       if(typ === 'expense') amt = -Math.abs(amt);
       else amt = Math.abs(amt);
       const catId = document.getElementById('category') ? document.getElementById('category').value : 'uncategorized';
-      addTransaction(desc, amt, undefined, catId);
+      addTransaction(desc || (typ === 'income' ? 'Pemasukan' : 'Pengeluaran'), amt, undefined, catId);
+      // show success popup and toast
+      try{ showSuccessPopup(`${typ === 'income' ? 'Pemasukan' : 'Pengeluaran'} berhasil ditambahkan: ${fmt(Math.abs(amt))}`); }catch(e){ /* ignore */ }
+      showToast(`${typ === 'income' ? 'Pemasukan' : 'Pengeluaran'} ditambahkan`, 'success', 2500);
       descEl.value=''; amountEl.value='';
     }
+
+    // attach handlers for both large buttons and keep legacy addBtn functionality
+    const addIncomeBtn = document.getElementById('addIncomeBtn');
+    const addExpenseBtn = document.getElementById('addExpenseBtn');
+    if(addIncomeBtn) addIncomeBtn.onclick = ()=> addTxFromInputs('income');
+    if(addExpenseBtn) addExpenseBtn.onclick = ()=> addTxFromInputs('expense');
+    if(addBtn) addBtn.onclick = ()=> addTxFromInputs(typeEl ? typeEl.value : 'expense');
 
     // quick text add
     const quickBtn = document.getElementById('quickAddBtn');
@@ -456,6 +483,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
         }
         const desc = t.replace(amtMatch[0],'').trim();
         addTransaction(desc || 'Quick add', amt, new Date().toISOString(), catId);
+        // show success popup for quick adds
+        try{ showSuccessPopup(`${amt < 0 ? 'Pengeluaran' : 'Pemasukan'} berhasil ditambahkan: ${fmt(Math.abs(amt))}`); }catch(e){ }
+        showToast('Quick add: ' + fmt(amt),'success');
         quickText.value='';
       }
     }
