@@ -7,9 +7,45 @@ document.addEventListener('DOMContentLoaded', ()=>{
     const fmt = n => 'Rp' + Number(n).toLocaleString('id-ID');
     const parseCurrencyString = s => {
       if (!s) return 0;
-      // remove Rp, spaces, and dots; replace comma with dot for decimals
-      const cleaned = s.replace(/Rp|rp|\s+/g, '').replace(/\./g, '').replace(/,/g, '.').replace(/[^0-9.-]/g, '');
-      const num = parseFloat(cleaned);
+      // normalize and detect decimal separator robustly
+      let v = String(s || '').trim();
+      // remove currency words and whitespace
+      v = v.replace(/Rp|rp|IDR|idr|\s+/g, '');
+      // keep only digits, separators and minus
+      v = v.replace(/[^0-9.,-]/g, '');
+
+      const lastDot = v.lastIndexOf('.');
+      const lastComma = v.lastIndexOf(',');
+
+      if (lastDot !== -1 && lastComma !== -1) {
+        // both present: determine which is the decimal separator by position
+        if (lastDot > lastComma) {
+          // dot appears later -> dot is decimal separator, remove commas
+          v = v.replace(/,/g, '');
+        } else {
+          // comma appears later -> comma is decimal separator
+          v = v.replace(/\./g, '').replace(/,/g, '.');
+        }
+      } else if (lastComma !== -1) {
+        // only comma present: decide if it's decimal (e.g., 4,50) or thousands (e.g., 4,010)
+        const decimals = v.length - lastComma - 1;
+        if (decimals === 3) {
+          // likely thousands separators
+          v = v.replace(/,/g, '');
+        } else {
+          // treat comma as decimal separator
+          v = v.replace(/,/g, '.');
+        }
+      } else if (lastDot !== -1) {
+        const decimals = v.length - lastDot - 1;
+        if (decimals === 3) {
+          // likely thousands separators
+          v = v.replace(/\./g, '');
+        }
+        // else dot is decimal separator -> leave it
+      }
+
+      const num = parseFloat(v);
       return isNaN(num) ? 0 : num;
     }
     const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -475,6 +511,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
       try{
         const { createWorker } = Tesseract;
         let ocrText = null;
+        let lastRes = null; // keep full result (with words & boxes) for advanced selection
 
         // Prefer worker API when fully supported; if the returned worker lacks the expected
         // methods, gracefully fall back to Tesseract.recognize instead of throwing.
@@ -510,6 +547,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
             ]);
             if(timeoutId) clearTimeout(timeoutId);
 
+            lastRes = res;
             ocrText = (res && res.data && res.data.text) ? res.data.text : (res.text || '');
             await worker.terminate();
             worker = null;
@@ -536,6 +574,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
               new Promise((_, reject) => { timeoutId = setTimeout(() => reject(new Error('OCR timeout')), OCR_TIMEOUT_MS); })
             ]);
             if(timeoutId) clearTimeout(timeoutId);
+            lastRes = res;
             ocrText = (res && res.data && res.data.text) ? res.data.text : (res.text || '');
           } else {
             throw new Error('Tesseract API not available');
@@ -576,18 +615,164 @@ document.addEventListener('DOMContentLoaded', ()=>{
           ocrHint.innerText = `Terbaca total: ${fmt(amtFromTotalLine)} — masuk sebagai ${isIncome? 'income':'pengeluaran'}`;
           showToast('Scan berhasil: ' + fmt(amt),'success');
         } else {
-          const matches = ocrText.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
-          if(matches && matches.length){
-            const nums = matches.map(m => parseCurrencyString(m));
-            const max = Math.max(...nums);
+          // Advanced heuristic: prefer currency tokens that are emphasized (e.g., preceded by "Rp", bold/darker text or visually brighter/different)
+          // We'll use detailed OCR words (if available) and sample the image pixels within each word bbox to compute a simple emphasis score.
+          let amtPicked = null;
+          let foundDesc = null;
+          const currencyRe = /Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/gi;
+
+          async function loadImage(file, maxDim = 800){
+            return new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => {
+                // scale down for performance
+                const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(img.width * scale);
+                canvas.height = Math.round(img.height * scale);
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve({ img, canvas, ctx, scale });
+              };
+              img.onerror = reject;
+              img.src = URL.createObjectURL(file);
+            });
+          }
+
+          function getBoxForWord(w){
+            // handle common bbox shapes
+            if(w.bbox && typeof w.bbox.x0 !== 'undefined'){
+              return { x: w.bbox.x0, y: w.bbox.y0, w: w.bbox.x1 - w.bbox.x0, h: w.bbox.y1 - w.bbox.y0 };
+            }
+            if(typeof w.left !== 'undefined'){
+              return { x: w.left, y: w.top, w: w.width || 0, h: w.height || 0 };
+            }
+            return null;
+          }
+
+          async function sampleDarkRatio(canvas, box){
+            const { x, y, w, h } = box;
+            if(w <= 0 || h <= 0) return 0;
+            try{
+              const ctx = canvas.getContext('2d');
+              // clamp to canvas
+              const sx = Math.max(0, Math.floor(x));
+              const sy = Math.max(0, Math.floor(y));
+              const sw = Math.max(1, Math.min(canvas.width - sx, Math.ceil(w)));
+              const sh = Math.max(1, Math.min(canvas.height - sy, Math.ceil(h)));
+              const data = ctx.getImageData(sx, sy, sw, sh).data;
+              let dark = 0; let total = 0;
+              for(let i = 0; i < data.length; i += 4){
+                const r = data[i], g = data[i+1], b = data[i+2];
+                // luminance
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                if(lum < 140) dark++;
+                total++;
+              }
+              return total ? (dark / total) : 0;
+            }catch(e){ return 0; }
+          }
+
+          // Use detailed OCR word boxes when available to score candidate numeric tokens
+          if(lastRes && lastRes.data && Array.isArray(lastRes.data.words) && lastFile){
+            try{
+              const { canvas, scale } = await loadImage(lastFile);
+              const words = lastRes.data.words;
+              const candidates = [];
+              for(let i = 0; i < words.length; i++){
+                const w = words[i];
+                const txt = (w.text || '').trim();
+                if(!txt) continue;
+                // check explicit Rp or numeric content
+                currencyRe.lastIndex = 0;
+                const numericMatch = txt.match(currencyRe);
+                const prev = words[i-1] ? (words[i-1].text || '') : '';
+                const next = words[i+1] ? (words[i+1].text || '') : '';
+                // tokens that are numeric or adjacent to 'Rp' are candidates
+                const isNumericToken = !!numericMatch || /\d/.test(txt);
+                const hasRpNearby = /\brp\b/i.test(txt) || /\brp\b/i.test(prev) || /\brp\b/i.test(next);
+                if(!isNumericToken && !hasRpNearby) continue;
+
+                // get bbox and map to scaled canvas coordinates
+                const b = getBoxForWord(w);
+                if(!b) continue;
+                const box = { x: Math.max(0, Math.round(b.x * scale)), y: Math.max(0, Math.round(b.y * scale)), w: Math.round(b.w * scale), h: Math.round(b.h * scale) };
+                const darkRatio = await sampleDarkRatio(canvas, box);
+                const sizeScore = (box.h / Math.max(1, canvas.height));
+                const conf = (typeof w.confidence === 'number' ? (w.confidence / 100) : 0);
+                // numeric value extraction: prefer numeric part in txt or nearby next token
+                let amtVal = null;
+                if(numericMatch && numericMatch.length){
+                  amtVal = parseCurrencyString(numericMatch[numericMatch.length - 1]);
+                } else {
+                  // try next word
+                  if(next && next.match(currencyRe)){
+                    const nm = next.match(currencyRe);
+                    amtVal = parseCurrencyString(nm[nm.length-1]);
+                  }
+                }
+                // compute score: prioritize explicit Rp, dark text (bold), larger font (size), and OCR confidence
+                const score = (hasRpNearby ? 3 : 0) + (darkRatio * 2) + (sizeScore * 2) + (conf * 1);
+                if(amtVal && amtVal > 0){
+                  candidates.push({ score, amt: amtVal, text: txt, idx: i, darkRatio, sizeScore, conf });
+                }
+              }
+
+              if(candidates.length){
+                candidates.sort((a,b) => b.score - a.score);
+                const best = candidates[0];
+                amtPicked = best.amt;
+                foundDesc = `Scan (pilihan visual)`;
+              }
+            }catch(e){ console.warn('Emphasis scoring failed, falling back:', e); }
+          }
+
+          // fallback: use the 'amount under name' heuristic (transfer receipts) if emphasis didn't find any
+          if(amtPicked === null){
+            let amtUnderName = null;
+            let nameDetected = null;
+            for(let i = 0; i < lines.length - 1; i++){
+              const cur = lines[i];
+              const nxt = lines[i+1];
+              // require current line to look like a name (letters, not mostly digits) and next line to contain a currency-like token
+              if(/[A-Za-z]/.test(cur) && !/\d/.test(cur) && /\d/.test(nxt)){
+                currencyRe.lastIndex = 0;
+                const found = nxt.match(currencyRe);
+                if(found && found.length){
+                  amtUnderName = parseCurrencyString(found[found.length - 1]);
+                  nameDetected = cur;
+                  break;
+                }
+              }
+            }
+            if(amtUnderName !== null){ amtPicked = amtUnderName; foundDesc = `Scan: ${nameDetected || 'hasil scan'}`; }
+          }
+
+          // still no visual pick: fall back to largest numeric token as before
+          if(amtPicked === null){
+            const matches = ocrText.match(/Rp\s*[0-9.,]+|\d+(?:[.,]\d{3})*(?:[.,]\d+)?/g);
+            if(matches && matches.length){
+              const nums = matches.map(m => parseCurrencyString(m));
+              const max = Math.max(...nums);
+              amtPicked = max;
+              foundDesc = `Scan: ${matches[0]||'hasil scan'}`;
+            }
+          }
+
+          if(amtPicked !== null){
             const lower = ocrText.toLowerCase();
             const isIncome = /income|pemasukan|gaji|salary/.test(lower);
-            const amt = isIncome ? Math.abs(max) : -Math.abs(max);
-            // attempt to pick category from OCR text
+            const amt = isIncome ? Math.abs(amtPicked) : -Math.abs(amtPicked);
+            // pick category by keyword
             let catId = 'uncategorized';
             for(const c of categories){ if(c.keywords && c.keywords.some(k=> new RegExp('\\b'+escapeRegExp(k)+'\\b','i').test(lower))){ catId = c.id; break; } }
-            addTransaction('Scan: ' + (matches[0]||'hasil scan'), amt, new Date().toISOString(), catId);
-            ocrHint.innerText = `Terbaca: ${matches.join(', ')} — masuk sebagai ${isIncome? 'income':'pengeluaran'}`;
+            addTransaction(foundDesc || 'Scan result', amt, new Date().toISOString(), catId);
+            // show emphasized hint if detection used visual scoring
+            if(foundDesc && foundDesc.toLowerCase().includes('visual')){
+              ocrHint.innerText = `Terbaca (ditekankan): ${fmt(amtPicked)}`;
+            } else {
+              ocrHint.innerText = `Terbaca: ${fmt(amtPicked)}`;
+            }
             showToast('Scan berhasil: ' + fmt(amt),'success');
           } else {
             ocrHint.innerText = 'Tidak menemukan angka pada gambar.';
