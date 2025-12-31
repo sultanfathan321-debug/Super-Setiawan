@@ -53,7 +53,8 @@
         </div>
         <div class="form-row">
           <input class="input" id="desc" placeholder="Deskripsi (mis. Gaji / Belanja)" />
-          <select id="type" class="small">
+          <!-- keep the old type select for compatibility but visually hide it for a simpler UI -->
+          <select id="type" class="small sr-only" aria-hidden="true">
             <option value="income">Pemasukan</option>
             <option value="expense" selected>Pengeluaran</option>
           </select>
@@ -61,7 +62,12 @@
         <div class="form-row">
           <input class="input" id="amount" placeholder="Masukkan nominal (contoh: Rp10.000 atau 10000)" />
           <select id="category" class="small"></select>
-          <button id="addBtn" class="btn">Tambahkan</button>
+        </div>
+        <div class="form-row" style="gap:12px;margin-top:8px">
+          <button id="addIncomeBtn" class="btn big-action-btn" aria-label="Tambah Pemasukan">Tambah Pemasukan</button>
+          <button id="addExpenseBtn" class="btn big-action-btn" aria-label="Tambah Pengeluaran">Tambah Pengeluaran</button>
+          <!-- fallback hidden button for compatibility with older code paths -->
+          <button id="addBtn" class="btn sr-only">Tambahkan</button>
         </div>
         <div class="hint">Atau scan struk/foto untuk masukkan otomatis</div>
         <div class="form-row" style="margin-top:8px">
@@ -114,6 +120,17 @@
 </div>
 
   <div id="toastContainer" aria-live="polite" class="toast-container"></div>
+
+  <!-- Success Modal (non-blocking, auto-close) -->
+  <div id="successModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-body" id="successModalBody">Berhasil</div>
+      <div class="modal-actions" style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button id="successOk" class="btn">OK</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Confirmation Modal (non-blocking) -->
   <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
